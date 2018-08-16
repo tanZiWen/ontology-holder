@@ -1,0 +1,8 @@
+{
+  "MysqlDataSourceName":"username:pwd@tcp(ip)/ontology_holder?charset=utf8",
+  "OntologyRpcAddress":"http://ip:20336",
+  "HttpServerPort":8080,
+  "DBBatchSize":500,
+  "DBBatchTime":60,
+  "MaxQueryPageSize":100
+}
