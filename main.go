@@ -57,19 +57,6 @@ func main() {
 	waitToExit()
 }
 
-func Get(p int, helper *MySqlHelper) {
-	size := 50
-	from := (p - 1) * size
-	holders, err := helper.GetAssetHolder(from, size, ONT_CONTRACT_ADDRESS)
-	if err != nil {
-		log4.Info("GetAssetHolder error:%s", err)
-		return
-	}
-	for _, holder := range holders {
-		log4.Info("%+v", holder)
-	}
-}
-
 func waitToExit() {
 	exit := make(chan bool, 0)
 	sc := make(chan os.Signal, 1)
