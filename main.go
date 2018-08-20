@@ -27,8 +27,15 @@ func main() {
 		return
 	}
 
-	mySqlHelper := NewMySqlHelper()
-	err = mySqlHelper.Open(DefConfig.MysqlDataSourceName)
+	mySqlHelper := NewMySqlHelper(
+		DefConfig.MySqlAddress,
+		DefConfig.MySqlUserName,
+		DefConfig.MySqlPassword,
+		DefConfig.MySqlDBName,
+		DefConfig.MySqlMaxIdleConnSize,
+		DefConfig.MySqlMaxOpenConnSize,
+		DefConfig.MySqlConnMaxLifetime)
+	err = mySqlHelper.Open()
 	if err != nil {
 		log4.Error("Open mysql error:%s", err)
 		return
@@ -39,6 +46,7 @@ func main() {
 		log4.Error("InitDB error:%s", err)
 		return
 	}
+	log4.Info("MySql init success")
 
 	ontSdk := ontsdk.NewOntologySdk()
 	rpcClient := ontSdk.NewRpcClient().SetAddress(DefConfig.OntologyRpcAddress)

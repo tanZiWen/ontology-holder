@@ -14,6 +14,7 @@ func init() {
 	DefHttpSvr.RegHandler("getAssetInfo", DefHttpSvr.GetAssetInfo)
 	DefHttpSvr.RegHandler("getAssetHolderCount", DefHttpSvr.GetAssetHolderCount)
 	DefHttpSvr.RegHandler("getAssetHolder", DefHttpSvr.GetAssetHolder)
+	DefHttpSvr.RegHandler("getBalance", DefHttpSvr.GetBalance)
 }
 
 type HttpServer struct {
@@ -242,7 +243,7 @@ func (this *HttpServer) GetAssetHolder(req *HttpServerRequest, resp *HttpServerR
 		return
 	}
 
-	assetHolders, err := DefOntologyMgr.GetAssetHolder(from, count, contract)
+	assetHolders, err := DefOntologyMgr.GetAssetHolder(from, count, "", contract)
 	if err != nil {
 		resp.ErrorCode = ERR_INTERNAL
 		log4.Info("GetAssetHolder GetAssetHolder error:%s", err)
@@ -260,4 +261,43 @@ func (this *HttpServer) GetAssetHolder(req *HttpServerRequest, resp *HttpServerR
 	}
 
 	resp.Result = assetHolderPers
+}
+
+type AssetBalance struct {
+	Contract string `json:"contract"`
+	Balance  uint64 `json:"balance"`
+}
+
+func (this *HttpServer) GetBalance(req *HttpServerRequest, resp *HttpServerResponse) {
+	address, err := req.GetParamString("address")
+	if err != nil {
+		resp.ErrorCode = ERR_INVALID_PARAMS
+		log4.Info("GetAssetHolder GetParamString address error:%s", err)
+		return
+	}
+	contract, err := req.GetParamString("contract")
+	if err != nil {
+		if err != ERR_PARAM_NOT_EXIST {
+			resp.ErrorCode = ERR_INVALID_PARAMS
+			log4.Info("GetAssetHolder GetParamString contract error:%s", err)
+			return
+		}
+	}
+	assetHolders, err := DefOntologyMgr.GetAssetHolder(0, 0, address, contract)
+	if err != nil {
+		resp.ErrorCode = ERR_INTERNAL
+		log4.Info("GetBalance GetAssetHolder address:%s contract:%s error:%s", address, contract, err)
+		return
+	}
+
+	assetBalances := make([]*AssetBalance, 0, len(assetHolders))
+	for _, assetHolder := range assetHolders {
+		assetBalances = append(assetBalances,
+			&AssetBalance{
+				Contract: assetHolder.Contract,
+				Balance:  assetHolder.Balance,
+			})
+	}
+
+	resp.Result = assetBalances
 }

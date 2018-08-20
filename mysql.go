@@ -8,21 +8,41 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"io/ioutil"
 	"strings"
+	"time"
 )
 
 type MySqlHelper struct {
-	db *sql.DB
+	MySqlAddress         string
+	MySqlUserName        string
+	MySqlPassword        string
+	MySqlDBName          string
+	MySqlMaxIdleConnSize int
+	MySqlMaxOpenConnSize int
+	MySqlConnMaxLifetime int
+	db                   *sql.DB
 }
 
-func NewMySqlHelper() *MySqlHelper {
-	return &MySqlHelper{}
+func NewMySqlHelper(address, username, passwd, dbName string, maxIdleConnSize, maxOpenConnSize, connMaxLiftTime int) *MySqlHelper {
+	return &MySqlHelper{
+		MySqlAddress:         address,
+		MySqlUserName:        username,
+		MySqlPassword:        passwd,
+		MySqlDBName:          dbName,
+		MySqlMaxIdleConnSize: maxIdleConnSize,
+		MySqlMaxOpenConnSize: maxOpenConnSize,
+		MySqlConnMaxLifetime: connMaxLiftTime,
+	}
 }
 
-func (this *MySqlHelper) Open(dsn string) error {
+func (this *MySqlHelper) Open() error {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s?charset=utf8", this.MySqlUserName, this.MySqlPassword, this.MySqlAddress, this.MySqlDBName)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return err
 	}
+	db.SetMaxIdleConns(this.MySqlMaxIdleConnSize)
+	db.SetMaxOpenConns(this.MySqlMaxOpenConnSize)
+	db.SetConnMaxLifetime(time.Duration(this.MySqlConnMaxLifetime) * time.Second)
 	err = db.Ping()
 	if err != nil {
 		return err
@@ -32,18 +52,21 @@ func (this *MySqlHelper) Open(dsn string) error {
 }
 
 func (this *MySqlHelper) InitDB(installFile string) error {
-	isInstall, err := this.isInstall()
+	isTableCreate, err := this.isTableCreate()
 	if err != nil {
 		return err
 	}
-	if isInstall {
-		return nil
+	if !isTableCreate {
+		err = this.createTable(installFile)
+		if err != nil {
+			return err
+		}
 	}
-	return this.install(installFile)
+	return nil
 }
 
-func (this *MySqlHelper) isInstall() (bool, error) {
-	sqlText := "SELECT count(*) FROM information_schema.TABLES WHERE table_name ='holder';"
+func (this *MySqlHelper) isTableCreate() (bool, error) {
+	sqlText := "SELECT count(*) FROM information_schema.TABLES WHERE table_name ='holder' And table_schema ='" + this.MySqlDBName + "';"
 	rows, err := this.db.Query(sqlText)
 	if err != nil {
 		return false, err
@@ -58,13 +81,13 @@ func (this *MySqlHelper) isInstall() (bool, error) {
 	return count != 0, nil
 }
 
-func (this *MySqlHelper) install(installFile string) error {
+func (this *MySqlHelper) createTable(installFile string) error {
 	data, err := ioutil.ReadFile(installFile)
 	if err != nil {
 		return err
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("install file empty")
+		return fmt.Errorf("createTable file empty")
 	}
 
 	dbTx, err := this.db.Begin()
@@ -89,13 +112,14 @@ func (this *MySqlHelper) install(installFile string) error {
 		}
 		_, err = dbTx.Exec(sqlText)
 		if err != nil {
-			return fmt.Errorf("Install table failed, exec:%s error:%s", sqlText, err)
+			return fmt.Errorf("install table failed, exec:%s error:%s", sqlText, err)
 		}
+		log4.Info("CreateTable:%s success.", sqlText)
 	}
 
 	err = dbTx.Commit()
 	if err != nil {
-		return fmt.Errorf("Intall dbTx.Commit error:%s", err)
+		return fmt.Errorf("intall dbTx.Commit error:%s", err)
 	}
 	rollBack = false
 	return nil
@@ -173,12 +197,32 @@ func (this *MySqlHelper) OnTxEventNotify(evtNotify []*TxEventNotify, assetHolder
 	return nil
 }
 
-func (this *MySqlHelper) GetAssetHolder(from, count int, contract string, isDescOrder ...bool) ([]*AssetHolder, error) {
+func (this *MySqlHelper) GetAssetHolder(from, count int, address, contract string, isDescOrder ...bool) ([]*AssetHolder, error) {
 	order := "DESC"
 	if len(isDescOrder) > 0 && !isDescOrder[0] {
 		order = "ASC"
 	}
-	sqlText := fmt.Sprintf("Select address, balance From holder Where contract = '%s' Order By balance %s Limit %d, %d;", contract, order, from, count)
+	buf := bytes.NewBuffer(nil)
+	if contract != "" {
+		buf.WriteString("Select address, balance From holder Where contract = '" + contract + "' ")
+	} else {
+		buf.WriteString("Select address, contract, balance From holder Where ")
+	}
+	if address != "" {
+		if contract != "" {
+			buf.WriteString("And ")
+		}
+		buf.WriteString("address = '" + address + "' ")
+	}
+	buf.WriteString("Order By balance " + order)
+	if count == 0 {
+		buf.WriteString(";")
+	} else {
+		buf.WriteString(fmt.Sprintf(" Limit %d, %d;", from, count))
+	}
+	sqlText := buf.String()
+	log4.Debug("GetAssetHolder SqlText:%s", sqlText)
+
 	rows, err := this.db.Query(sqlText)
 	if err != nil {
 		return nil, fmt.Errorf("db.Query error:%s", err)
@@ -187,10 +231,13 @@ func (this *MySqlHelper) GetAssetHolder(from, count int, contract string, isDesc
 
 	holders := make([]*AssetHolder, 0, count)
 	for rows.Next() {
-		holder := &AssetHolder{
-			Contract: contract,
+		holder := &AssetHolder{}
+		if contract != "" {
+			err = rows.Scan(&holder.Address, &holder.Balance)
+			holder.Contract = contract
+		} else {
+			err = rows.Scan(&holder.Address, &holder.Contract, &holder.Balance)
 		}
-		err = rows.Scan(&holder.Address, &holder.Balance)
 		if err != nil {
 			return nil, fmt.Errorf("row.Scan error:%s", err)
 		}

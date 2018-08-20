@@ -68,11 +68,14 @@ func (this *OntologyManager) initTotalSupply() error {
 		return err
 	}
 	this.ONTTotalSupply = ontTotal
+	log4.Info("ONTTotalSupply:%d", ontTotal)
 	ongTotal, err := this.ontSdk.Native.Ong.TotalSupply()
 	if err != nil {
 		return err
 	}
 	this.ONGTotalSupply = ongTotal
+	log4.Info("ONGTotalSupply:%d", ongTotal)
+
 	return nil
 }
 
@@ -84,6 +87,7 @@ func (this *OntologyManager) initSyncedEvtBlockHeight() error {
 	if syncedHeight > 0 {
 		this.syncedEvtNotifyBlockHeight = syncedHeight
 	}
+	log4.Info("SyncedEvtNotifyBlockHeight:%d", this.GetSyncedEvtNotifyBlockHeight())
 	return nil
 }
 
@@ -165,7 +169,7 @@ func (this *OntologyManager) syncEvtNotify() {
 	if currentBlockHeight == syncedBlockHeight {
 		return
 	}
-	for height := syncedBlockHeight + 1; uint32(height) < currentBlockHeight; height++ {
+	for height := syncedBlockHeight + 1; uint32(height) <= currentBlockHeight; height++ {
 		evt, err := this.ontSdk.GetSmartContractEventByBlock(uint32(height))
 		if err != nil {
 			log4.Error("GetSmartContractEventByBlock error:%s", err)
@@ -291,7 +295,11 @@ func (this *OntologyManager) retryOnTransfer(txNotifies []*TxEventNotify, txTran
 			return
 		}
 		log4.Error("OntologyManager onTransfer error:%s", err)
-		time.Sleep(time.Second)
+		select {
+		case <-this.exitCh:
+			return
+		case <-time.After(time.Second):
+		}
 	}
 }
 
@@ -366,8 +374,8 @@ func (this *OntologyManager) onTransfer(txNotifies []*TxEventNotify, txTransfers
 	for _, txTransfer := range txTransfers {
 		key := txTransfer.From + txTransfer.Contract
 		assetHolder, ok := assetHolderMap[key]
-		if !ok {
-			err = fmt.Errorf("Invalid transfer, Contact:%s TxHash:%s From:%s To:%s Amount:%d", txTransfer.Contract, txTransfer.TxHash, txTransfer.From, txTransfer.To, txTransfer.Amount)
+		if !ok || assetHolder.Balance < txTransfer.Amount {
+			err = fmt.Errorf("invalid transfer, Contact:%s TxHash:%s From:%s To:%s Amount:%d", txTransfer.Contract, txTransfer.TxHash, txTransfer.From, txTransfer.To, txTransfer.Amount)
 			log4.Error(err)
 			time.Sleep(time.Second) //wait to log
 			panic(err)
@@ -400,12 +408,12 @@ func (this *OntologyManager) onTransfer(txNotifies []*TxEventNotify, txTransfers
 	return nil
 }
 
-func (this *OntologyManager) GetOntSdk()*ontsdk.OntologySdk{
+func (this *OntologyManager) GetOntSdk() *ontsdk.OntologySdk {
 	return this.ontSdk
 }
 
-func (this *OntologyManager) GetAssetHolder(from, count int, contract string) ([]*AssetHolder, error) {
-	return this.mysqlHelper.GetAssetHolder(from, count, contract)
+func (this *OntologyManager) GetAssetHolder(from, count int, address, contract string) ([]*AssetHolder, error) {
+	return this.mysqlHelper.GetAssetHolder(from, count, address, contract)
 }
 
 func (this *OntologyManager) GetSyncedEvtNotifyBlockHeight() uint32 {
@@ -416,7 +424,7 @@ func (this *OntologyManager) SetSyncedEvtNotifyBlockHeight(height uint32) {
 	atomic.StoreUint32(&this.syncedEvtNotifyBlockHeight, height)
 }
 
-func (this *OntologyManager) GetAssetHolderCount(contract string)(int, error){
+func (this *OntologyManager) GetAssetHolderCount(contract string) (int, error) {
 	return this.mysqlHelper.GetAssetHolderCount(contract)
 }
 

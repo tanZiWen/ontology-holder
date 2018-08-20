@@ -10,7 +10,7 @@ import (
 func TestAssetHolder(t *testing.T) {
 	err := GetJsonObject(CfgPath, DefConfig)
 	if err != nil {
-		t.Error("Init config error:%s", err)
+		t.Errorf("init config error:%s", err)
 		return
 	}
 
@@ -18,8 +18,15 @@ func TestAssetHolder(t *testing.T) {
 	rpcClient := ontSdk.NewRpcClient().SetAddress(DefConfig.OntologyRpcAddress)
 	ontSdk.SetDefaultClient(rpcClient)
 
-	mySqlHelper := NewMySqlHelper()
-	err = mySqlHelper.Open(DefConfig.MysqlDataSourceName)
+	mySqlHelper := NewMySqlHelper(
+		DefConfig.MySqlAddress,
+		DefConfig.MySqlUserName,
+		DefConfig.MySqlPassword,
+		DefConfig.MySqlDBName,
+		DefConfig.MySqlMaxIdleConnSize,
+		DefConfig.MySqlMaxOpenConnSize,
+		DefConfig.MySqlConnMaxLifetime)
+	err = mySqlHelper.Open()
 	if err != nil {
 		t.Errorf("mySqlHelper.Open error:%s", err)
 		return
@@ -32,7 +39,7 @@ func TestAssetHolder(t *testing.T) {
 	contract := ONT_CONTRACT_ADDRESS
 	size := 100
 	for from := 0; ; from += size {
-		assetHolders, err := mySqlHelper.GetAssetHolder(from, size, contract)
+		assetHolders, err := mySqlHelper.GetAssetHolder(from, size, "", contract)
 		if err != nil {
 			t.Errorf("GetAssetHolder error:%s", err)
 			return
