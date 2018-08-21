@@ -35,4 +35,11 @@ http://localhost:8080/GetAssetInfo?qid=1&contract=010000000000000000000000000000
 http://localhost:8080/getAssetHolderCount?qid=1&contract=0100000000000000000000000000000000000000
 ```
 
+4. Get balance of address
+
+```
+http://localhost:8090/getBalance?address=AMX6ZebrPDFELCYRMpSMbZWrhWkKbKg4y8&contract=0200000000000000000000000000000000000000
+```
+
+contract param is option.
 
