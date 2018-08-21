@@ -189,14 +189,7 @@ func (this *HttpServer) GetAssetHolderCount(req *HttpServerRequest, resp *HttpSe
 		resp.ErrorCode = ERR_INVALID_PARAMS
 		return
 	}
-	count, err := DefOntologyMgr.GetAssetHolderCount(contract)
-	if err != nil {
-		resp.ErrorCode = ERR_INTERNAL
-		log4.Error("GetAssetHolderCount error:%s", err)
-		return
-	}
-
-	resp.Result = count
+	resp.Result = DefOntologyMgr.GetAssetHolderCount(contract)
 }
 
 func (this *HttpServer) GetAssetHolder(req *HttpServerRequest, resp *HttpServerResponse) {

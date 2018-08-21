@@ -51,6 +51,10 @@ func (this *MySqlHelper) Open() error {
 	return nil
 }
 
+func (this *MySqlHelper) Close() error {
+	return this.db.Close()
+}
+
 func (this *MySqlHelper) InitDB(installFile string) error {
 	isTableCreate, err := this.isTableCreate()
 	if err != nil {
@@ -364,9 +368,28 @@ func (this *MySqlHelper) GetAssetHolderCount(contract string) (int, error) {
 	return count, nil
 }
 
+func (this *MySqlHelper) GetAssetHolderCounts() (map[string]int, error) {
+	sqlText := "Select contract, count(*) From holder group by contract;"
+	rows, err := this.db.Query(sqlText)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[string]int)
+	for rows.Next() {
+		contract := ""
+		count := 0
+		err = rows.Scan(&contract, &count)
+		if err != nil {
+			return nil, fmt.Errorf("row.Scan error:%s", err)
+		}
+		counts[contract] = count
+	}
+	return counts, nil
+}
+
 func (this *MySqlHelper) GetHeartbeat(module string) (*Heartbeat, error) {
 	sqlText := "Select node_id, update_time From heartbeat Where module = '" + module + "'"
-	this.db.Query(sqlText)
 	rows, err := this.db.Query(sqlText)
 	if err != nil {
 		return nil, err
@@ -417,7 +440,6 @@ func (this *MySqlHelper) UpdateHeartbeat(module string, nodeId uint32) (bool, er
 
 func (this *MySqlHelper) CheckHeartbeatTimeout(module string, timeout uint32) (uint32, error) {
 	sqlText := fmt.Sprintf("Select ifnull(node_id,0) From heartbeat Where module = '%s' And (Now()-update_time) >= %d;", module, timeout)
-	this.db.Query(sqlText)
 	rows, err := this.db.Query(sqlText)
 	if err != nil {
 		return 0, err

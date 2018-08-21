@@ -27,7 +27,7 @@ func main() {
 		log4.Error("Init config error:%s", err)
 		return
 	}
-
+	log4.Info("Config:%+v", DefConfig)
 	_, err = InitNodeId(NodeIdFile)
 	if err != nil {
 		log4.Error("InitNodeId error:%s", err)
@@ -54,6 +54,7 @@ func main() {
 		log4.Error("InitDB error:%s", err)
 		return
 	}
+	defer mySqlHelper.Close()
 	log4.Info("MySql init success")
 
 	ontSdk := ontsdk.NewOntologySdk()

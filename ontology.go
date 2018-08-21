@@ -14,7 +14,7 @@ import (
 var DefOntologyMgr *OntologyManager
 
 const (
-	SYNC_EVTNOTIFY_CHAN_SIZE = 10240
+	SYNC_EVTNOTIFY_CHAN_SIZE = 1000
 )
 
 type EventNotify struct {
@@ -27,10 +27,10 @@ type OntologyManager struct {
 	mysqlHelper                *MySqlHelper
 	syncedEvtNotifyBlockHeight uint32
 	syncEvtNotifyChan          chan *EventNotify
-	syncEvtNotifyLock          *OneThreadExecLock
 	ONTTotalSupply             uint64
 	ONGTotalSupply             uint64
 	hb                         *Heartbeat
+	holderCounts               map[string]int
 	exitCh                     chan interface{}
 	lock                       sync.RWMutex
 }
@@ -39,7 +39,6 @@ func NewOntologyManager(ontSdk *ontsdk.OntologySdk, mySqlHelper *MySqlHelper) *O
 	return &OntologyManager{
 		ontSdk:            ontSdk,
 		mysqlHelper:       mySqlHelper,
-		syncEvtNotifyLock: NewOneThreadExecLock(),
 		syncEvtNotifyChan: make(chan *EventNotify, SYNC_EVTNOTIFY_CHAN_SIZE),
 		exitCh:            make(chan interface{}, 0),
 	}
@@ -50,8 +49,12 @@ func (this *OntologyManager) Start() error {
 	if err != nil {
 		return err
 	}
+	err = this.initAssetHolderCounts()
+	if err != nil {
+		return err
+	}
 	go this.startHeartbeat()
-	go this.startUpdateSyncedBlockHeight()
+	go this.startUpdateInfo()
 
 	err = this.initTotalSupply()
 	if err != nil {
@@ -88,15 +91,18 @@ func (this *OntologyManager) initTotalSupply() error {
 }
 
 func (this *OntologyManager) initSyncedEvtBlockHeight() error {
-	syncedHeight, err := this.mysqlHelper.GetSyncedEventNotifyBlockHeight()
+	return this.updateSyncedEvtNotifyBlockHeight()
+}
+
+func (this *OntologyManager) initAssetHolderCounts() error {
+	counts, err := this.mysqlHelper.GetAssetHolderCounts()
 	if err != nil {
-		return fmt.Errorf("GetSyncedEventNotifyBlockHeight error:%s", err)
+		return fmt.Errorf("GetAssetHolderCounts error:%s", err)
 	}
-	if syncedHeight > 0 {
-		syncedHeight-- //Insure all of the block transactions has already inserted to db
-		this.SetSyncedEvtNotifyBlockHeight(syncedHeight)
+	this.setAssetHolderCount(counts)
+	for contract, count := range counts {
+		log4.Info("AssetHolderCounts contract:%s count:%d", contract, count)
 	}
-	log4.Info("SyncedEvtNotifyBlockHeight:%d", this.GetSyncedEvtNotifyBlockHeight())
 	return nil
 }
 
@@ -152,11 +158,12 @@ func (this *OntologyManager) initGenesisBlock() error {
 }
 
 func (this *OntologyManager) startSyncEvtNotify() {
-	syncEvtTicker := time.NewTicker(time.Second)
+	syncEvtTimer := time.NewTimer(time.Second)
 	for {
 		select {
-		case <-syncEvtTicker.C:
-			go this.syncEvtNotify()
+		case <-syncEvtTimer.C:
+			this.syncEvtNotify()
+			syncEvtTimer.Reset(time.Second)
 		case <-this.exitCh:
 			return
 		}
@@ -164,15 +171,6 @@ func (this *OntologyManager) startSyncEvtNotify() {
 }
 
 func (this *OntologyManager) syncEvtNotify() {
-	if this.GetCurrentNodeId() != NodeId {
-		return
-	}
-
-	if !this.syncEvtNotifyLock.TryLock() {
-		return
-	}
-	defer this.syncEvtNotifyLock.Release()
-
 	currentBlockHeight, err := this.ontSdk.GetCurrentBlockHeight()
 	if err != nil {
 		log4.Error("GetCurrentBlockHeight error:%s", err)
@@ -182,16 +180,24 @@ func (this *OntologyManager) syncEvtNotify() {
 	if currentBlockHeight == syncedBlockHeight {
 		return
 	}
+	log4.Debug("Start to sync block height:%d", syncedBlockHeight+1)
 	for height := syncedBlockHeight + 1; uint32(height) <= currentBlockHeight; height++ {
+		if this.GetCurrentNodeId() != NodeId {
+			return
+		}
 		evt, err := this.ontSdk.GetSmartContractEventByBlock(uint32(height))
 		if err != nil {
 			log4.Error("GetSmartContractEventByBlock error:%s", err)
 			return
 		}
-		this.SetSyncedEvtNotifyBlockHeight(height)
-		this.syncEvtNotifyChan <- &EventNotify{
+		select {
+		case this.syncEvtNotifyChan <- &EventNotify{
 			BlockHeight:   uint32(height),
 			EventNotifies: evt,
+		}:
+			this.SetSyncedEvtNotifyBlockHeight(height)
+		default:
+			return
 		}
 	}
 }
@@ -290,12 +296,6 @@ func (this *OntologyManager) handleEvtNotify() {
 			}
 			notifyTimer.Reset(dbBatchTime)
 		case <-this.exitCh:
-			if len(txEvtNotifies) > 0 {
-				err := this.onTransfer(txEvtNotifies, txTransfers)
-				if err != nil {
-					log4.Error("OntologyManager onTransfer error:%s", err)
-				}
-			}
 			return
 		}
 	}
@@ -317,6 +317,9 @@ func (this *OntologyManager) retryOnTransfer(txNotifies []*TxEventNotify, txTran
 }
 
 func (this *OntologyManager) onTransfer(txNotifies []*TxEventNotify, txTransfers []*TxTransfer) error {
+	if this.GetCurrentNodeId() != NodeId {
+		return nil
+	}
 	txNotifySize := len(txNotifies)
 	if txNotifySize == 0 {
 		return nil
@@ -437,10 +440,6 @@ func (this *OntologyManager) SetSyncedEvtNotifyBlockHeight(height uint32) {
 	atomic.StoreUint32(&this.syncedEvtNotifyBlockHeight, height)
 }
 
-func (this *OntologyManager) GetAssetHolderCount(contract string) (int, error) {
-	return this.mysqlHelper.GetAssetHolderCount(contract)
-}
-
 func (this *OntologyManager) initHeartbeat() error {
 	heartbeat, err := this.mysqlHelper.GetHeartbeat(HEARTBEAT_MODULE)
 	if err != nil {
@@ -455,101 +454,102 @@ func (this *OntologyManager) initHeartbeat() error {
 		if err != nil {
 			return fmt.Errorf("InsertHeartbeat error:%s", err)
 		}
-	} else if heartbeat.NodeId != NodeId {
-		nodeId, err := this.mysqlHelper.CheckHeartbeatTimeout(HEARTBEAT_MODULE, DefConfig.GetHeartbeatTimeoutTime())
-		if err != nil {
-			return fmt.Errorf("CheckHeartbeatTimeout error:%s", err)
-		}
-		if nodeId != 0 {
-			//Timeout, reset node id
-			ok, err := this.mysqlHelper.ResetHeartbeat(HEARTBEAT_MODULE, NodeId, nodeId)
-			if err != nil {
-				return fmt.Errorf("ResetHeartbeat from:%d to:%d error:%s", heartbeat.NodeId, NodeId, err)
-			}
-			if ok {
-				//reset success
-				heartbeat.NodeId = NodeId
-			}
-		}
 	}
 	this.hb = heartbeat
-	return nil
+	return this.heartbeat()
 }
 
 func (this *OntologyManager) startHeartbeat() {
 	hbInterval := DefConfig.GetHeartbeatUpdateInterval()
-	hbTicker := time.NewTicker(time.Duration(hbInterval) * time.Second)
+	hbTimer := time.NewTimer(time.Duration(hbInterval) * time.Second)
 	for {
 		select {
-		case <-hbTicker.C:
-			go this.heartbeat()
+		case <-hbTimer.C:
+			err := this.heartbeat()
+			if err != nil {
+				log4.Error("heartbeat error:%s", err)
+			}
+			hbTimer.Reset(time.Duration(hbInterval) * time.Second)
 		case <-this.exitCh:
 			return
 		}
 	}
 }
 
-func (this *OntologyManager) heartbeat() {
+func (this *OntologyManager) heartbeat() error {
 	if this.GetCurrentNodeId() == NodeId {
 		ok, err := this.mysqlHelper.UpdateHeartbeat(HEARTBEAT_MODULE, NodeId)
 		if err != nil {
-			log4.Error("OntologyManager UpdateHeartbeat error:%s", err)
-			return
+			return fmt.Errorf("UpdateHeartbeat error:%s", err)
 		}
+		log4.Debug("UpdateHeartbeat result:%v", ok)
 		if ok {
-			return
+			return nil
 		}
 		//Node was been switched from current node.
 		heartbeat, err := this.mysqlHelper.GetHeartbeat(HEARTBEAT_MODULE)
 		if err != nil {
-			log4.Error("GetHeartbeat error:%s", err)
-			return
+			return fmt.Errorf("GetHeartbeat error:%s", err)
 		}
 		this.SetCurrentNodeId(heartbeat.NodeId)
-		return
+		log4.Info("Current node switch to:%d", heartbeat.NodeId)
+		return nil
 	}
 	lastNodeId, err := this.mysqlHelper.CheckHeartbeatTimeout(HEARTBEAT_MODULE, DefConfig.GetHeartbeatTimeoutTime())
 	if err != nil {
-		log4.Error("OntologyManager CheckHeartbeatTimeout error:%s", err)
-		return
+		return fmt.Errorf("OntologyManager CheckHeartbeatTimeout error:%s", err)
 	}
+	log4.Debug("CheckHeartbeatTimeout lastNodeId:%d", lastNodeId)
 	if lastNodeId == 0 {
-		return //heartbeat ok
+		return nil //heartbeat ok
 	}
+	log4.Info("Current node:%d heartbeat timeout", lastNodeId)
 	//heartbeat timeout
 	ok, err := this.mysqlHelper.ResetHeartbeat(HEARTBEAT_MODULE, NodeId, lastNodeId)
 	if err != nil {
-		log4.Error("OntologyManager ResetHeartbeat error:%s", err)
-		return
+		return fmt.Errorf("OntologyManager ResetHeartbeat error:%s", err)
 	}
 	if !ok {
 		//reset failed
-		return
+		return nil
 	}
 	this.SetCurrentNodeId(NodeId)
-	return
+	log4.Info("NodeId:%d Switch to current node", NodeId)
+	return nil
 }
 
-func (this *OntologyManager) startUpdateSyncedBlockHeight() {
-	updateTicker := time.NewTicker(GET_SYNCED_BLOCK_HEIGHT_INTERVAL)
+func (this *OntologyManager) startUpdateInfo() {
+	syncedBlockTime := time.Duration(DefConfig.GetSyncedBlockHeightInterval()) * time.Second
+	holderCountTime := time.Duration(DefConfig.GetHolderCountUpdateInterval()) * time.Second
+
+	syncedHeightUpdateTimer := time.NewTimer(syncedBlockTime)
+	holderCountUpdateTimer := time.NewTimer(holderCountTime)
 	for {
 		select {
-		case <-updateTicker.C:
-			go this.updateSyncedEvtNotifyBlockHeight()
+		case <-syncedHeightUpdateTimer.C:
+			if this.GetCurrentNodeId() != NodeId {
+				err := this.updateSyncedEvtNotifyBlockHeight()
+				if err != nil {
+					log4.Error("updateSyncedEvtNotifyBlockHeight error:%s", err)
+				}
+			}
+			syncedHeightUpdateTimer.Reset(syncedBlockTime)
+		case <-holderCountUpdateTimer.C:
+			err := this.updateAssetHolderCounts()
+			if err != nil {
+				log4.Error("updateAssetHolderCounts error:%s", err)
+			}
+			holderCountUpdateTimer.Reset(holderCountTime)
 		case <-this.exitCh:
 			return
 		}
 	}
 }
 
-func (this *OntologyManager) updateSyncedEvtNotifyBlockHeight() {
-	if this.GetCurrentNodeId() == NodeId {
-		return
-	}
+func (this *OntologyManager) updateSyncedEvtNotifyBlockHeight() error {
 	syncedBlockHeight, err := this.mysqlHelper.GetSyncedEventNotifyBlockHeight()
 	if err != nil {
-		log4.Error("GetSyncedEventNotifyBlockHeight error:%s", err)
-		return
+		return fmt.Errorf("GetSyncedEventNotifyBlockHeight error:%s", err)
 	}
 	if syncedBlockHeight > 0 {
 		//Insure all of the block transactions has already inserted to db
@@ -557,6 +557,7 @@ func (this *OntologyManager) updateSyncedEvtNotifyBlockHeight() {
 	}
 	this.SetSyncedEvtNotifyBlockHeight(syncedBlockHeight)
 	log4.Info("CurrentSyncedBlockHeight:%d", syncedBlockHeight)
+	return nil
 }
 
 func (this *OntologyManager) GetCurrentNodeId() uint32 {
@@ -569,6 +570,34 @@ func (this *OntologyManager) SetCurrentNodeId(nodeId uint32) {
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	this.hb.NodeId = nodeId
+}
+
+func (this *OntologyManager) updateAssetHolderCounts() error {
+	counts, err := this.mysqlHelper.GetAssetHolderCounts()
+	if err != nil {
+		return fmt.Errorf("GetAssetHolderCounts error:%s", err)
+	}
+	this.setAssetHolderCount(counts)
+	log4.Debug("GetAssetHolderCounts:")
+	for contract, count := range counts {
+		log4.Debug("Contract:%s count:%d", contract, count)
+	}
+	return nil
+}
+
+func (this *OntologyManager) setAssetHolderCount(counts map[string]int) {
+	this.lock.Lock()
+	defer this.lock.Unlock()
+	this.holderCounts = counts
+}
+
+func (this *OntologyManager) GetAssetHolderCount(contract string) int {
+	this.lock.RLock()
+	defer this.lock.RUnlock()
+	if this.holderCounts == nil {
+		return 0
+	}
+	return this.holderCounts[contract]
 }
 
 func (this *OntologyManager) Close() {

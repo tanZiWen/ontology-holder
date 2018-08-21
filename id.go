@@ -12,7 +12,7 @@ func init() {
 var NodeId uint32
 
 func GenNodeId() uint32 {
-	return rand.Uint32()
+	return uint32(rand.Int31n(1000000))
 }
 
 func InitNodeId(file string) (uint32, error) {
