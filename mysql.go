@@ -16,13 +16,13 @@ type MySqlHelper struct {
 	MySqlUserName        string
 	MySqlPassword        string
 	MySqlDBName          string
-	MySqlMaxIdleConnSize int
-	MySqlMaxOpenConnSize int
-	MySqlConnMaxLifetime int
+	MySqlMaxIdleConnSize uint32
+	MySqlMaxOpenConnSize uint32
+	MySqlConnMaxLifetime uint32
 	db                   *sql.DB
 }
 
-func NewMySqlHelper(address, username, passwd, dbName string, maxIdleConnSize, maxOpenConnSize, connMaxLiftTime int) *MySqlHelper {
+func NewMySqlHelper(address, username, passwd, dbName string, maxIdleConnSize, maxOpenConnSize, connMaxLiftTime uint32) *MySqlHelper {
 	return &MySqlHelper{
 		MySqlAddress:         address,
 		MySqlUserName:        username,
@@ -40,8 +40,8 @@ func (this *MySqlHelper) Open() error {
 	if err != nil {
 		return err
 	}
-	db.SetMaxIdleConns(this.MySqlMaxIdleConnSize)
-	db.SetMaxOpenConns(this.MySqlMaxOpenConnSize)
+	db.SetMaxIdleConns(int(this.MySqlMaxIdleConnSize))
+	db.SetMaxOpenConns(int(this.MySqlMaxOpenConnSize))
 	db.SetConnMaxLifetime(time.Duration(this.MySqlConnMaxLifetime) * time.Second)
 	err = db.Ping()
 	if err != nil {
@@ -157,7 +157,6 @@ func (this *MySqlHelper) OnTxEventNotify(evtNotify []*TxEventNotify, assetHolder
 		}
 	}
 	holderSqlText := holderSqlBuf.String()
-
 	dbTx, err := this.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin transaction error:%s", err)
@@ -174,19 +173,19 @@ func (this *MySqlHelper) OnTxEventNotify(evtNotify []*TxEventNotify, assetHolder
 
 	results, err := dbTx.Exec(notifySqlText)
 	if err != nil {
-		return fmt.Errorf("Insert notify dbTx.Exec error:%s", err)
+		return fmt.Errorf("insert notify dbTx.Exec error:%s", err)
 	}
 	affected, err := results.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("Insert notify dbTx.Exec RowsAffected error:%s", err)
+		return fmt.Errorf("insert notify dbTx.Exec RowsAffected error:%s", err)
 	}
 	if int(affected) != notifyCount {
-		return fmt.Errorf("Insert notify dbTx.Exec  RowsAffected %d != %d", affected, notifyCount)
+		fmt.Printf("Insert notify dbTx.Exec  RowsAffected %d != %d\n", affected, notifyCount)
+		return nil
 	}
-
 	_, err = dbTx.Exec(holderSqlText)
 	if err != nil {
-		return fmt.Errorf("Insert holder dbTx.Exec error:%s", err)
+		return fmt.Errorf("insert holder dbTx.Exec error:%s", err)
 	}
 
 	err = dbTx.Commit()
@@ -363,4 +362,87 @@ func (this *MySqlHelper) GetAssetHolderCount(contract string) (int, error) {
 		return 0, fmt.Errorf("row.Scan error:%s", err)
 	}
 	return count, nil
+}
+
+func (this *MySqlHelper) GetHeartbeat(module string) (*Heartbeat, error) {
+	sqlText := "Select node_id, update_time From heartbeat Where module = '" + module + "'"
+	this.db.Query(sqlText)
+	rows, err := this.db.Query(sqlText)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, nil
+	}
+	heartbeat := &Heartbeat{Module: module}
+	err = rows.Scan(&heartbeat.NodeId, &heartbeat.UpdateTime)
+	if err != nil {
+		return nil, fmt.Errorf("row scan error:%s", err)
+	}
+	return heartbeat, nil
+}
+
+func (this *MySqlHelper) InsertHeartbeat(heartbeat *Heartbeat) error {
+	sqlText := fmt.Sprintf("Insert into heartbeat(module, node_id, update_time) Values ('%s', %d, Now());", heartbeat.Module, heartbeat.NodeId)
+	results, err := this.db.Exec(sqlText)
+	if err != nil {
+		return fmt.Errorf("db.Exec error:%s", err)
+	}
+	affected, err := results.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("RowsAffected() error:%s", err)
+	}
+	if affected != 1 {
+		return fmt.Errorf("affected != 1")
+	}
+	return nil
+}
+
+func (this *MySqlHelper) UpdateHeartbeat(module string, nodeId uint32) (bool, error) {
+	sqlText := fmt.Sprintf("Update heartbeat Set update_time = Now() Where node_id = %d;", nodeId)
+	results, err := this.db.Exec(sqlText)
+	if err != nil {
+		return false, fmt.Errorf("db.Exec error:%s", err)
+	}
+	affected, err := results.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("RowsAffected() error:%s", err)
+	}
+	if affected != 1 {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (this *MySqlHelper) CheckHeartbeatTimeout(module string, timeout uint32) (uint32, error) {
+	sqlText := fmt.Sprintf("Select ifnull(node_id,0) From heartbeat Where module = '%s' And (Now()-update_time) >= %d;", module, timeout)
+	this.db.Query(sqlText)
+	rows, err := this.db.Query(sqlText)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, nil
+	}
+	nodeId := uint32(0)
+	err = rows.Scan(&nodeId)
+	if err != nil {
+		return 0, fmt.Errorf("row.Scan error:%s", err)
+	}
+	return nodeId, nil
+}
+
+func (this *MySqlHelper) ResetHeartbeat(module string, nodeId, lastNodeId uint32) (bool, error) {
+	sqlText := fmt.Sprintf("Update heartbeat Set node_id = %d, update_time = Now() Where module = '%s' And node_id = %d;", nodeId, module, lastNodeId)
+	results, err := this.db.Exec(sqlText)
+	if err != nil {
+		return false, fmt.Errorf("db.Exec error:%s", err)
+	}
+	affected, err := results.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("RowsAffected() error:%s", err)
+	}
+	return affected == 1, nil
 }

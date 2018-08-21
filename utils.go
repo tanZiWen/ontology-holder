@@ -51,6 +51,14 @@ func GetJsonObject(filePath string, jsonObject interface{}) error {
 	return nil
 }
 
+func SaveJsonObject(filePath string, jsonObject interface{}) error {
+	data, err := json.Marshal(jsonObject)
+	if err != nil {
+		return fmt.Errorf("json.Marshal error:%s", err)
+	}
+	return ioutil.WriteFile(filePath, data, 0666)
+}
+
 func SystemContractAddressTransfer(contractAddress string) string {
 	switch contractAddress {
 	case ONT_CONTRACT_ADDRESS_BASE58:
@@ -74,4 +82,9 @@ func GetAddress(address string) (common.Address, error) {
 		return addr, nil
 	}
 	return common.ADDRESS_EMPTY, fmt.Errorf("invalid address")
+}
+
+func IsFileExisted(filename string) bool {
+	_, err := os.Stat(filename)
+	return err == nil || os.IsExist(err)
 }

@@ -30,6 +30,7 @@ type OntologyManager struct {
 	syncEvtNotifyLock          *OneThreadExecLock
 	ONTTotalSupply             uint64
 	ONGTotalSupply             uint64
+	hb                         *Heartbeat
 	exitCh                     chan interface{}
 	lock                       sync.RWMutex
 }
@@ -45,7 +46,14 @@ func NewOntologyManager(ontSdk *ontsdk.OntologySdk, mySqlHelper *MySqlHelper) *O
 }
 
 func (this *OntologyManager) Start() error {
-	err := this.initTotalSupply()
+	err := this.initHeartbeat()
+	if err != nil {
+		return err
+	}
+	go this.startHeartbeat()
+	go this.startUpdateSyncedBlockHeight()
+
+	err = this.initTotalSupply()
 	if err != nil {
 		return err
 	}
@@ -85,7 +93,8 @@ func (this *OntologyManager) initSyncedEvtBlockHeight() error {
 		return fmt.Errorf("GetSyncedEventNotifyBlockHeight error:%s", err)
 	}
 	if syncedHeight > 0 {
-		this.syncedEvtNotifyBlockHeight = syncedHeight
+		syncedHeight-- //Insure all of the block transactions has already inserted to db
+		this.SetSyncedEvtNotifyBlockHeight(syncedHeight)
 	}
 	log4.Info("SyncedEvtNotifyBlockHeight:%d", this.GetSyncedEvtNotifyBlockHeight())
 	return nil
@@ -155,6 +164,10 @@ func (this *OntologyManager) startSyncEvtNotify() {
 }
 
 func (this *OntologyManager) syncEvtNotify() {
+	if this.GetCurrentNodeId() != NodeId {
+		return
+	}
+
 	if !this.syncEvtNotifyLock.TryLock() {
 		return
 	}
@@ -262,7 +275,7 @@ func (this *OntologyManager) handleEvtNotify() {
 				txEvtNotifies = append(txEvtNotifies, txEvtNotify)
 				log4.Info("EventNotify:%+v", txEvtNotify)
 
-				if len(txEvtNotifies) >= dbBatchSize {
+				if len(txEvtNotifies) >= int(dbBatchSize) {
 					this.retryOnTransfer(txEvtNotifies, txTransfers)
 					txEvtNotifies = make([]*TxEventNotify, 0, dbBatchSize)
 					txTransfers = make([]*TxTransfer, 0, dbBatchSize*2)
@@ -426,6 +439,136 @@ func (this *OntologyManager) SetSyncedEvtNotifyBlockHeight(height uint32) {
 
 func (this *OntologyManager) GetAssetHolderCount(contract string) (int, error) {
 	return this.mysqlHelper.GetAssetHolderCount(contract)
+}
+
+func (this *OntologyManager) initHeartbeat() error {
+	heartbeat, err := this.mysqlHelper.GetHeartbeat(HEARTBEAT_MODULE)
+	if err != nil {
+		return fmt.Errorf("GetHeartbeat error:%s", err)
+	}
+	if heartbeat == nil {
+		heartbeat = &Heartbeat{
+			Module: HEARTBEAT_MODULE,
+			NodeId: NodeId,
+		}
+		err = this.mysqlHelper.InsertHeartbeat(heartbeat)
+		if err != nil {
+			return fmt.Errorf("InsertHeartbeat error:%s", err)
+		}
+	} else if heartbeat.NodeId != NodeId {
+		nodeId, err := this.mysqlHelper.CheckHeartbeatTimeout(HEARTBEAT_MODULE, DefConfig.GetHeartbeatTimeoutTime())
+		if err != nil {
+			return fmt.Errorf("CheckHeartbeatTimeout error:%s", err)
+		}
+		if nodeId != 0 {
+			//Timeout, reset node id
+			ok, err := this.mysqlHelper.ResetHeartbeat(HEARTBEAT_MODULE, NodeId, nodeId)
+			if err != nil {
+				return fmt.Errorf("ResetHeartbeat from:%d to:%d error:%s", heartbeat.NodeId, NodeId, err)
+			}
+			if ok {
+				//reset success
+				heartbeat.NodeId = NodeId
+			}
+		}
+	}
+	this.hb = heartbeat
+	return nil
+}
+
+func (this *OntologyManager) startHeartbeat() {
+	hbInterval := DefConfig.GetHeartbeatUpdateInterval()
+	hbTicker := time.NewTicker(time.Duration(hbInterval) * time.Second)
+	for {
+		select {
+		case <-hbTicker.C:
+			go this.heartbeat()
+		case <-this.exitCh:
+			return
+		}
+	}
+}
+
+func (this *OntologyManager) heartbeat() {
+	if this.GetCurrentNodeId() == NodeId {
+		ok, err := this.mysqlHelper.UpdateHeartbeat(HEARTBEAT_MODULE, NodeId)
+		if err != nil {
+			log4.Error("OntologyManager UpdateHeartbeat error:%s", err)
+			return
+		}
+		if ok {
+			return
+		}
+		//Node was been switched from current node.
+		heartbeat, err := this.mysqlHelper.GetHeartbeat(HEARTBEAT_MODULE)
+		if err != nil {
+			log4.Error("GetHeartbeat error:%s", err)
+			return
+		}
+		this.SetCurrentNodeId(heartbeat.NodeId)
+		return
+	}
+	lastNodeId, err := this.mysqlHelper.CheckHeartbeatTimeout(HEARTBEAT_MODULE, DefConfig.GetHeartbeatTimeoutTime())
+	if err != nil {
+		log4.Error("OntologyManager CheckHeartbeatTimeout error:%s", err)
+		return
+	}
+	if lastNodeId == 0 {
+		return //heartbeat ok
+	}
+	//heartbeat timeout
+	ok, err := this.mysqlHelper.ResetHeartbeat(HEARTBEAT_MODULE, NodeId, lastNodeId)
+	if err != nil {
+		log4.Error("OntologyManager ResetHeartbeat error:%s", err)
+		return
+	}
+	if !ok {
+		//reset failed
+		return
+	}
+	this.SetCurrentNodeId(NodeId)
+	return
+}
+
+func (this *OntologyManager) startUpdateSyncedBlockHeight() {
+	updateTicker := time.NewTicker(GET_SYNCED_BLOCK_HEIGHT_INTERVAL)
+	for {
+		select {
+		case <-updateTicker.C:
+			go this.updateSyncedEvtNotifyBlockHeight()
+		case <-this.exitCh:
+			return
+		}
+	}
+}
+
+func (this *OntologyManager) updateSyncedEvtNotifyBlockHeight() {
+	if this.GetCurrentNodeId() == NodeId {
+		return
+	}
+	syncedBlockHeight, err := this.mysqlHelper.GetSyncedEventNotifyBlockHeight()
+	if err != nil {
+		log4.Error("GetSyncedEventNotifyBlockHeight error:%s", err)
+		return
+	}
+	if syncedBlockHeight > 0 {
+		//Insure all of the block transactions has already inserted to db
+		syncedBlockHeight--
+	}
+	this.SetSyncedEvtNotifyBlockHeight(syncedBlockHeight)
+	log4.Info("CurrentSyncedBlockHeight:%d", syncedBlockHeight)
+}
+
+func (this *OntologyManager) GetCurrentNodeId() uint32 {
+	this.lock.RLock()
+	defer this.lock.RUnlock()
+	return this.hb.NodeId
+}
+
+func (this *OntologyManager) SetCurrentNodeId(nodeId uint32) {
+	this.lock.Lock()
+	defer this.lock.Unlock()
+	this.hb.NodeId = nodeId
 }
 
 func (this *OntologyManager) Close() {

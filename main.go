@@ -14,6 +14,7 @@ var (
 	CfgPath       = "./config.json"
 	LogPath       = "./log4go.xml"
 	DBInstallFile = "./install.sql"
+	NodeIdFile    = ".id"
 )
 
 func main() {
@@ -26,6 +27,13 @@ func main() {
 		log4.Error("Init config error:%s", err)
 		return
 	}
+
+	_, err = InitNodeId(NodeIdFile)
+	if err != nil {
+		log4.Error("InitNodeId error:%s", err)
+		return
+	}
+	log4.Info("Ontology-holder NodeId:%d", NodeId)
 
 	mySqlHelper := NewMySqlHelper(
 		DefConfig.MySqlAddress,
@@ -60,7 +68,7 @@ func main() {
 	}
 	defer DefOntologyMgr.Close()
 
-	DefHttpSvr.Start(DefConfig.HttpServerPort)
+	DefHttpSvr.Start(uint(DefConfig.HttpServerPort))
 
 	waitToExit()
 }

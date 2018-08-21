@@ -14,3 +14,11 @@ CREATE TABLE `eventnotify` (
   PRIMARY KEY (`tx_hash`),
   UNIQUE KEY `tx_hash_UNIQUE` (`tx_hash`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+CREATE TABLE `heartbeat` (
+  `module` varchar(64) NOT NULL,
+  `node_id` int(11) NOT NULL,
+  `update_time` datetime NOT NULL,
+  PRIMARY KEY (`module`),
+  UNIQUE KEY ` node_id_UNIQUE` (`module`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;

@@ -225,7 +225,7 @@ func (this *HttpServer) GetAssetHolder(req *HttpServerRequest, resp *HttpServerR
 		return
 	}
 
-	if count > DefConfig.MaxQueryPageSize {
+	if count > int(DefConfig.MaxQueryPageSize) {
 		resp.ErrorCode = ERR_INVALID_PARAMS
 		resp.ErrorInfo = fmt.Sprintf("count out of range[1, %d]", DefConfig.MaxQueryPageSize)
 		return

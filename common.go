@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -16,6 +17,21 @@ const (
 	GOVERNANCE_CONTRACT_ADDRESS        = "0700000000000000000000000000000000000000"
 	GOVERNANCE_CONTRACT_ADDRESS_BASE58 = "AFmseVrdL9f9oyCzZefL9tG6UbviEH9ugK"
 )
+
+const (
+	HEARTBEAT_MODULE = "holder"
+
+	DEFAULT_HEARTBEAT_TIMEOUT_TIME    = 60 //s
+	DEFAULT_HAARTBEAT_UPDATE_INTERVAL = 10 //s
+
+	GET_SYNCED_BLOCK_HEIGHT_INTERVAL = time.Second * 5
+)
+
+type Heartbeat struct {
+	Module     string
+	UpdateTime string
+	NodeId     uint32
+}
 
 type TxTransfer struct {
 	TxHash   string
