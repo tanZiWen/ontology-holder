@@ -388,6 +388,42 @@ func (this *MySqlHelper) GetAssetHolderCounts() (map[string]int, error) {
 	return counts, nil
 }
 
+func (this *MySqlHelper) GetOngTotalAmount() (uint64, error) {
+	sqlText := "Select sum(balance) From holder where contract='0200000000000000000000000000000000000000';"
+	rows, err := this.db.Query(sqlText)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, nil
+	}
+	var sum uint64
+	err = rows.Scan(&sum)
+	if err != nil {
+		return 0, fmt.Errorf("row.Scan error:%s", err)
+	}
+	return sum, nil
+}
+
+func (this *MySqlHelper) GetOntTotalAmount() (uint64, error) {
+	sqlText := "Select sum(balance) From holder where contract='0100000000000000000000000000000000000000';"
+	rows, err := this.db.Query(sqlText)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return 0, nil
+	}
+	var sum uint64
+	err = rows.Scan(&sum)
+	if err != nil {
+		return 0, fmt.Errorf("row.Scan error:%s", err)
+	}
+	return sum, nil
+}
+
 func (this *MySqlHelper) GetHeartbeat(module string) (*Heartbeat, error) {
 	sqlText := "Select node_id, update_time From heartbeat Where module = '" + module + "'"
 	rows, err := this.db.Query(sqlText)

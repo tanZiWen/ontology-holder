@@ -158,6 +158,9 @@ func (this *OntologyManager) initGenesisBlock() error {
 }
 
 func (this *OntologyManager) startSyncEvtNotify() {
+	fmt.Println("start sync evt notify")
+	this.syncEvtNotify()
+	fmt.Println("end sync evt notify")
 	syncEvtTimer := time.NewTimer(time.Second)
 	for {
 		select {
@@ -180,9 +183,10 @@ func (this *OntologyManager) syncEvtNotify() {
 	if currentBlockHeight == syncedBlockHeight {
 		return
 	}
-	log4.Debug("Start to sync block height:%d", syncedBlockHeight+1)
 	for height := syncedBlockHeight + 1; uint32(height) <= currentBlockHeight; height++ {
+		log4.Info("current block height:%d", height)
 		if this.GetCurrentNodeId() != NodeId {
+			log4.Error("this.GetCurrentNodeId()：%s NodeId:%s", this.GetCurrentNodeId(), NodeId)
 			return
 		}
 		evt, err := this.ontSdk.GetSmartContractEventByBlock(uint32(height))
@@ -201,6 +205,8 @@ func (this *OntologyManager) syncEvtNotify() {
 		}
 	}
 }
+
+
 
 func (this *OntologyManager) getTxTransferFromNotify(txEvt *sdkcom.SmartContactEvent) []*TxTransfer {
 	if len(txEvt.Notify) == 0 {
