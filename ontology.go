@@ -158,9 +158,7 @@ func (this *OntologyManager) initGenesisBlock() error {
 }
 
 func (this *OntologyManager) startSyncEvtNotify() {
-	fmt.Println("start sync evt notify")
 	this.syncEvtNotify()
-	fmt.Println("end sync evt notify")
 	syncEvtTimer := time.NewTimer(time.Second)
 	for {
 		select {
@@ -194,6 +192,7 @@ func (this *OntologyManager) syncEvtNotify() {
 			log4.Error("GetSmartContractEventByBlock error:%s", err)
 			return
 		}
+		log4.Info("syncEvtNotify:%v err:%v", evt, err)
 		select {
 		case this.syncEvtNotifyChan <- &EventNotify{
 			BlockHeight:   uint32(height),
@@ -262,7 +261,9 @@ func (this *OntologyManager) handleEvtNotify() {
 		case evtNotify := <-this.syncEvtNotifyChan:
 			ontEvtNotifies := evtNotify.EventNotifies
 			for _, ontEvt := range ontEvtNotifies {
+				log4.Info("handleEvtNotify:%v", ontEvt)
 				transfers := this.getTxTransferFromNotify(ontEvt)
+				log4.Info("handleEvtNotify:%s", len(transfers))
 				if len(transfers) == 0 {
 					continue
 				}

@@ -184,7 +184,7 @@ func (this *MySqlHelper) OnTxEventNotify(evtNotify []*TxEventNotify, assetHolder
 		return fmt.Errorf("insert notify dbTx.Exec RowsAffected error:%s", err)
 	}
 	if int(affected) != notifyCount {
-		fmt.Printf("Insert notify dbTx.Exec  RowsAffected %d != %d\n", affected, notifyCount)
+		log4.Error("Insert notify dbTx.Exec  RowsAffected %d != %d\n", affected, notifyCount)
 		return nil
 	}
 	_, err = dbTx.Exec(holderSqlText)
